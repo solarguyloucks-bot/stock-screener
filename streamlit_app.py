@@ -315,19 +315,22 @@ def _claude_call(prompt, max_tokens=1000):
 
 
 @st.cache_data(ttl=86400)
-def get_executive_summary(ticker, name, verdict, green_count, metrics, current_price=None):
+def get_executive_summary(ticker, name, verdict, green_count, metrics, current_price=None, news_headlines=()):
     metric_lines = "\n".join([f"- {label}: {val} ({status})" for label, val, status, _ in metrics])
-    price_line = f"Current price: ${current_price}" if current_price else ""
+    price_line   = f"Current price: ${current_price}\n" if current_price else ""
+    news_section = ""
+    if news_headlines:
+        headlines    = "\n".join(f"- {h}" for h in news_headlines)
+        news_section = f"\nRecent news headlines:\n{headlines}\n"
     prompt = f"""You are a Managing Director at a top-tier Wall Street equity research desk — think Goldman, Morgan Stanley, or Bernstein. You have just run {ticker} ({name}) through a 10-metric quantitative screen:
 
-{price_line}
-{metric_lines}
-
+{price_line}{metric_lines}
+{news_section}
 Screening verdict: {verdict} ({green_count}/10 green)
 
 Lead with a clear BUY / SELL / HOLD call and a one-line rationale. Then write 3-4 sentences of sharp analyst judgment:
 - What does this data tell you about the QUALITY and DURABILITY of this business?
-- What is the key bull vs. bear tension right now?
+- What is the key bull vs. bear tension right now, incorporating any relevant news context above?
 - What is your price conviction — would you be adding, trimming, or watching from the sidelines?
 - What single catalyst would change your rating?
 
@@ -535,7 +538,7 @@ def analyze(ticker):
         results["insider_str"]    = "N/A"
         results["insider_status"] = "red"
 
-    # Extra: sector + earnings dates for charts
+    # Extra: sector, earnings dates, recent news headlines
     results["sector"] = info.get("sector", "N/A")
     try:
         ed = stock.earnings_dates
@@ -545,6 +548,16 @@ def analyze(ticker):
             results["earnings_dates"] = []
     except:
         results["earnings_dates"] = []
+
+    try:
+        news = stock.news
+        results["news_headlines"] = tuple(
+            item.get("content", {}).get("title", "") or item.get("title", "")
+            for item in (news or [])[:5]
+            if item.get("content", {}).get("title") or item.get("title")
+        )
+    except Exception:
+        results["news_headlines"] = ()
 
     # Record cache timestamp
     _cache_timestamps[ticker] = datetime.now()
@@ -1258,7 +1271,11 @@ with tab1:
 
             # ── Executive Summary ─────────────────────────────────────────────
             with st.spinner("Generating executive summary..."):
-                summary = get_executive_summary(ticker, name, verdict, green_count, metrics, current_price=current)
+                summary = get_executive_summary(
+                    ticker, name, verdict, green_count, metrics,
+                    current_price=current,
+                    news_headlines=results.get("news_headlines", ())
+                )
 
             st.markdown(f"""
                 <p class="section-header" style="margin-top:1.5rem;">Executive summary</p>
