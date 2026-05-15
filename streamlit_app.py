@@ -1249,15 +1249,17 @@ with tab1:
                         st.markdown(st.session_state[miss_key])
 
             # ── Executive Summary ─────────────────────────────────────────────
-            with st.spinner("Generating executive summary..."):
-                summary = get_executive_summary(ticker, name, verdict, green_count, metrics)
+            summary_key = f"summary_{ticker}"
+            if summary_key not in st.session_state:
+                with st.spinner("Generating executive summary..."):
+                    st.session_state[summary_key] = get_executive_summary(ticker, name, verdict, green_count, metrics)
 
             st.markdown(f"""
                 <p class="section-header" style="margin-top:1.5rem;">Executive summary</p>
                 <div style="background:#f8f9fa;border:1px solid #eee;border-radius:10px;
                             padding:1.25rem 1.5rem;font-size:14px;line-height:1.8;color:#333;
                             margin-top:0.5rem;">
-                    {summary}
+                    {st.session_state[summary_key]}
                 </div>
             """, unsafe_allow_html=True)
 
@@ -1551,14 +1553,16 @@ with tab3:
                         st.markdown(st.session_state[fmiss_key])
 
             # ── Advisor Summary ───────────────────────────────────────────────
-            with st.spinner("Generating advisor summary..."):
-                fsummary = get_fund_summary(ft, fname, fverdict, fgreen_count, fmetrics)
+            fsummary_key = f"fund_summary_{ft}"
+            if fsummary_key not in st.session_state:
+                with st.spinner("Generating advisor summary..."):
+                    st.session_state[fsummary_key] = get_fund_summary(ft, fname, fverdict, fgreen_count, fmetrics)
 
             st.markdown(f"""
                 <p class="section-header" style="margin-top:1.5rem;">Advisor summary</p>
                 <div style="background:#f8f9fa;border:1px solid #eee;border-radius:10px;
                             padding:1.25rem 1.5rem;font-size:14px;line-height:1.8;color:#333;
                             margin-top:0.5rem;">
-                    {fsummary}
+                    {st.session_state[fsummary_key]}
                 </div>
             """, unsafe_allow_html=True)
