@@ -314,6 +314,7 @@ def _claude_call(prompt, max_tokens=1000):
         return f"Unable to generate response: {str(e)}"
 
 
+@st.cache_data(ttl=86400)
 def get_executive_summary(ticker, name, verdict, green_count, metrics):
     metric_lines = "\n".join([f"- {label}: {val} ({status})" for label, val, status, _ in metrics])
     prompt = f"""You are a Managing Director at a top-tier Wall Street equity research desk — think Goldman, Morgan Stanley, or Bernstein. You have just run {ticker} ({name}) through a 10-metric quantitative screen:
@@ -332,6 +333,7 @@ Write exactly like an MD presenting to the investment committee at 7am. Blunt, c
     return _claude_call(prompt, 1000)
 
 
+@st.cache_data(ttl=86400)
 def get_miss_explanation(ticker, name, metrics):
     weak = [(label, val, status) for label, val, status, _ in metrics if status in ("red", "yellow")]
     if not weak:
@@ -601,6 +603,7 @@ def get_fund_verdict(green_count):
         return "Avoid",                     "#922b21", "#fff5f5", "#e74c3c"
 
 
+@st.cache_data(ttl=86400)
 def get_fund_summary(ticker, name, verdict, green_count, metrics):
     metric_lines = "\n".join([f"- {label}: {val} ({status})" for label, val, status, _ in metrics])
     prompt = f"""You are a Managing Director on the asset allocation desk at Morgan Stanley Wealth Management. You are presenting {ticker} ({name}), a Vanguard fund, to the investment committee after running it through a 10-metric framework:
@@ -619,6 +622,7 @@ Write exactly like an MD presenting at 7am. Blunt, specific, no hedging. Plain p
     return _claude_call(prompt, 900)
 
 
+@st.cache_data(ttl=86400)
 def get_fund_miss_explanation(ticker, name, metrics, fund_meta=None):
     weak = [(label, val, status) for label, val, status, _ in metrics if status in ("red", "yellow")]
     if not weak:
@@ -1249,17 +1253,15 @@ with tab1:
                         st.markdown(st.session_state[miss_key])
 
             # ── Executive Summary ─────────────────────────────────────────────
-            summary_key = f"summary_{ticker}"
-            if summary_key not in st.session_state:
-                with st.spinner("Generating executive summary..."):
-                    st.session_state[summary_key] = get_executive_summary(ticker, name, verdict, green_count, metrics)
+            with st.spinner("Generating executive summary..."):
+                summary = get_executive_summary(ticker, name, verdict, green_count, metrics)
 
             st.markdown(f"""
                 <p class="section-header" style="margin-top:1.5rem;">Executive summary</p>
                 <div style="background:#f8f9fa;border:1px solid #eee;border-radius:10px;
                             padding:1.25rem 1.5rem;font-size:14px;line-height:1.8;color:#333;
                             margin-top:0.5rem;">
-                    {st.session_state[summary_key]}
+                    {summary}
                 </div>
             """, unsafe_allow_html=True)
 
@@ -1553,16 +1555,14 @@ with tab3:
                         st.markdown(st.session_state[fmiss_key])
 
             # ── Advisor Summary ───────────────────────────────────────────────
-            fsummary_key = f"fund_summary_{ft}"
-            if fsummary_key not in st.session_state:
-                with st.spinner("Generating advisor summary..."):
-                    st.session_state[fsummary_key] = get_fund_summary(ft, fname, fverdict, fgreen_count, fmetrics)
+            with st.spinner("Generating advisor summary..."):
+                fsummary = get_fund_summary(ft, fname, fverdict, fgreen_count, fmetrics)
 
             st.markdown(f"""
                 <p class="section-header" style="margin-top:1.5rem;">Advisor summary</p>
                 <div style="background:#f8f9fa;border:1px solid #eee;border-radius:10px;
                             padding:1.25rem 1.5rem;font-size:14px;line-height:1.8;color:#333;
                             margin-top:0.5rem;">
-                    {st.session_state[fsummary_key]}
+                    {fsummary}
                 </div>
             """, unsafe_allow_html=True)
