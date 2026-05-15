@@ -131,6 +131,11 @@ st.markdown("""
     .red-box .scorecard-value { color: #6b1f1a; }
     .red-box .scorecard-icon  { color: #e74c3c; }
 
+    .gray-box   { background: #f8f9fa; border-color: #ccc; }
+    .gray-box .scorecard-label { color: #999; }
+    .gray-box .scorecard-value { color: #aaa; }
+    .gray-box .scorecard-icon  { color: #ccc; }
+
     .scorecard-box:hover .tooltip { display: block; }
     .tooltip {
         display: none;
@@ -247,8 +252,10 @@ st.markdown("""
 
 # ── UI helpers ────────────────────────────────────────────────────────────────
 def score_box(label, value_str, status, tooltip):
-    icons = {"green": "✓", "yellow": "⚠", "red": "✕"}
-    css   = {"green": "green-box", "yellow": "yellow-box", "red": "red-box"}
+    if value_str.startswith("N/A"):
+        status = "gray"
+    icons = {"green": "✓", "yellow": "⚠", "red": "✕", "gray": "–"}
+    css   = {"green": "green-box", "yellow": "yellow-box", "red": "red-box", "gray": "gray-box"}
     st.markdown(f"""
         <div class="scorecard-box {css[status]}">
             <p class="scorecard-label">{label}</p>
@@ -609,15 +616,15 @@ def scan_ticker(ticker, min_cap, min_green):
 # ── Fund helpers ──────────────────────────────────────────────────────────────
 def get_fund_verdict(green_count):
     if green_count >= 8:
-        return "Core holding — overweight", "#085041", "#f0faf5", "#2ecc71"
+        return "Core holding — overweight candidate", "#085041", "#f0faf5", "#2ecc71"
     elif green_count >= 6:
-        return "Hold — market weight",      "#0F6E56", "#f0faf5", "#2ecc71"
+        return "Solid fund — hold",                  "#0F6E56", "#f0faf5", "#2ecc71"
     elif green_count >= 4:
-        return "Trim — find alternatives",  "#7d5a00", "#fffbf0", "#f39c12"
+        return "Acceptable — compare alternatives",  "#7d5a00", "#fffbf0", "#f39c12"
     elif green_count == 3:
-        return "Underweight",               "#5a4000", "#fffbf0", "#f39c12"
+        return "Usually pass",                        "#5a4000", "#fffbf0", "#f39c12"
     else:
-        return "Avoid",                     "#922b21", "#fff5f5", "#e74c3c"
+        return "Avoid",                               "#922b21", "#fff5f5", "#e74c3c"
 
 
 @st.cache_data(ttl=86400)
@@ -994,16 +1001,25 @@ if not check_password():
     st.stop()
 
 # ── Layout ────────────────────────────────────────────────────────────────────
-col1, col2, col3 = st.columns([1, 4, 1])
-with col2:
-    st.image("Stonks.jpg", use_container_width=True)
+_has_results = bool(st.session_state.get("results_data") or st.session_state.get("fund_results"))
 
-st.markdown("""
-    <div class="hero-wrap">
-        <p class="hero-title">📈 Stock Screener</p>
-        <p class="hero-sub">10-metric value investing scorecard — powered by live market data</p>
-    </div>
-""", unsafe_allow_html=True)
+if not _has_results:
+    col1, col2, col3 = st.columns([1, 4, 1])
+    with col2:
+        st.image("Stonks.jpg", use_container_width=True)
+    st.markdown("""
+        <div class="hero-wrap">
+            <p class="hero-title">📈 Stock Screener</p>
+            <p class="hero-sub">10-metric value investing scorecard — powered by live market data</p>
+        </div>
+    """, unsafe_allow_html=True)
+else:
+    st.markdown("""
+        <div style="padding:0.6rem 0 1rem 0;border-bottom:1px solid #f0f0f0;margin-bottom:1.25rem;display:flex;align-items:baseline;gap:12px;">
+            <span style="font-size:20px;font-weight:700;color:#111;">📈 Stock Screener</span>
+            <span style="font-size:13px;color:#bbb;">Ticker analyzer · Scanner · Vanguard funds</span>
+        </div>
+    """, unsafe_allow_html=True)
 
 tab1, tab2, tab3 = st.tabs(["🔍 Analyze Ticker", "🚀 Scanner", "🏦 Vanguard Funds"])
 
@@ -1053,8 +1069,33 @@ with tab1:
                 try:
                     info, hist, results = analyze(ticker)
                     st.session_state["results_data"][ticker] = (info, hist, results)
+                    # Track recently viewed
+                    rv = st.session_state.setdefault("recently_viewed", [])
+                    if ticker not in rv:
+                        rv.insert(0, ticker)
+                    st.session_state["recently_viewed"] = rv[:8]
                 except Exception:
                     st.error(f"Could not load data for {ticker}. Yahoo Finance may be rate-limiting — wait a moment and try again.")
+
+    # ── Recently viewed ───────────────────────────────────────────────────────
+    rv = st.session_state.get("recently_viewed", [])
+    if rv and not st.session_state.get("results_data"):
+        st.markdown('<p class="section-header">Recently analyzed</p>', unsafe_allow_html=True)
+        rv_cols = st.columns(len(rv))
+        for i, t in enumerate(rv):
+            if rv_cols[i].button(t, key=f"rv_{t}", use_container_width=True):
+                st.session_state["_rv_click"] = t
+                st.rerun()
+
+    if st.session_state.get("_rv_click"):
+        click = st.session_state.pop("_rv_click")
+        with st.spinner(f"Pulling data for {click}..."):
+            try:
+                info, hist, results = analyze(click)
+                st.session_state["results_data"] = {click: (info, hist, results)}
+            except Exception:
+                st.error(f"Could not load data for {click}.")
+        st.rerun()
 
     if "results_data" in st.session_state and st.session_state["results_data"]:
         results_data = st.session_state["results_data"]
@@ -1123,98 +1164,17 @@ with tab1:
             cached_at = _cache_timestamps.get(ticker)
             cache_note = f" · cached {cached_at.strftime('%I:%M %p')}" if cached_at else ""
 
+            # ── Title strip ───────────────────────────────────────────────────
             st.markdown(
                 f'<p class="ticker-name">{ticker} — {name}</p>'
-                f'<p class="ticker-sub">{sector_pill} Live market data{cache_note}</p>',
+                f'<p class="ticker-sub">{sector_pill}&nbsp;&nbsp;'
+                f'<b style="color:#111;">${current}</b>&nbsp;&nbsp;'
+                f'Mkt cap: {cap_str}&nbsp;&nbsp;'
+                f'52W: ${low52} – ${high52}'
+                f'{cache_note}</p>',
                 unsafe_allow_html=True
             )
             st.markdown("<br>", unsafe_allow_html=True)
-
-            m1, m2, m3, m4 = st.columns(4)
-            for col, label, val in [
-                (m1, "Current Price", f"${current}"),
-                (m2, "Market Cap", cap_str),
-                (m3, "52-Week High", f"${high52}"),
-                (m4, "52-Week Low", f"${low52}"),
-            ]:
-                col.markdown(f"""
-                    <div class="metric-card">
-                        <p class="metric-label">{label}</p>
-                        <p class="metric-value">{val}</p>
-                    </div>
-                """, unsafe_allow_html=True)
-
-            # ── Price chart with MA overlays + earnings markers ───────────────
-            st.markdown('<p class="section-header">Price chart</p>', unsafe_allow_html=True)
-            period_label  = st.radio("Period", list(period_map.keys()), index=1, horizontal=True, key=f"period_{ticker}")
-            selected_period = period_map[period_label]
-
-            chart_hist = yf.Ticker(ticker).history(period=selected_period)
-            fig = go.Figure()
-
-            # Price area
-            fig.add_trace(go.Scatter(
-                x=chart_hist.index, y=chart_hist["Close"],
-                fill="tozeroy",
-                line=dict(color="#2ecc71", width=2),
-                fillcolor="rgba(46,204,113,0.07)",
-                name="Price",
-                hovertemplate="$%{y:.2f}<extra></extra>"
-            ))
-
-            # 50-day MA
-            if len(chart_hist) >= 50:
-                ma50 = chart_hist["Close"].rolling(50).mean()
-                fig.add_trace(go.Scatter(
-                    x=chart_hist.index, y=ma50,
-                    line=dict(color="#f39c12", width=1.5, dash="dot"),
-                    name="50-day MA",
-                    hovertemplate="50MA $%{y:.2f}<extra></extra>"
-                ))
-
-            # 200-day MA
-            if len(chart_hist) >= 200:
-                ma200 = chart_hist["Close"].rolling(200).mean()
-                fig.add_trace(go.Scatter(
-                    x=chart_hist.index, y=ma200,
-                    line=dict(color="#e74c3c", width=1.5, dash="dot"),
-                    name="200-day MA",
-                    hovertemplate="200MA $%{y:.2f}<extra></extra>"
-                ))
-
-            # Earnings date markers
-            chart_start = chart_hist.index[0] if len(chart_hist) else None
-            for date_str in results.get("earnings_dates", []):
-                try:
-                    d = datetime.strptime(date_str, "%Y-%m-%d")
-                    if chart_start is not None and d >= chart_start.replace(tzinfo=None):
-                        fig.add_vline(
-                            x=date_str,
-                            line_dash="dot",
-                            line_color="rgba(90,90,180,0.45)",
-                            line_width=1.5,
-                            annotation_text="E",
-                            annotation_position="top",
-                            annotation=dict(font_size=10, font_color="rgba(90,90,180,0.7)")
-                        )
-                except Exception:
-                    pass
-
-            ymin = chart_hist["Close"].min() * 0.97
-            ymax = chart_hist["Close"].max() * 1.03
-
-            fig.update_layout(
-                height=280,
-                margin=dict(l=0, r=0, t=10, b=0),
-                paper_bgcolor="white",
-                plot_bgcolor="white",
-                showlegend=True,
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
-                            font=dict(size=11)),
-                xaxis=dict(showgrid=False, zeroline=False),
-                yaxis=dict(showgrid=True, gridcolor="#f5f5f5", zeroline=False, range=[ymin, ymax]),
-            )
-            st.plotly_chart(fig, use_container_width=True)
 
             # ── Scorecard ─────────────────────────────────────────────────────
             st.markdown('<p class="section-header">Scorecard</p>', unsafe_allow_html=True)
@@ -1257,6 +1217,63 @@ with tab1:
                 </div>
             """, unsafe_allow_html=True)
 
+            # ── Price chart with MA overlays + earnings markers ───────────────
+            st.markdown('<p class="section-header">Price chart</p>', unsafe_allow_html=True)
+            period_label  = st.radio("Period", list(period_map.keys()), index=1, horizontal=True, key=f"period_{ticker}")
+            selected_period = period_map[period_label]
+
+            chart_hist = yf.Ticker(ticker).history(period=selected_period)
+            fig = go.Figure()
+
+            fig.add_trace(go.Scatter(
+                x=chart_hist.index, y=chart_hist["Close"],
+                fill="tozeroy",
+                line=dict(color="#2ecc71", width=2),
+                fillcolor="rgba(46,204,113,0.07)",
+                name="Price",
+                hovertemplate="$%{y:.2f}<extra></extra>"
+            ))
+            if len(chart_hist) >= 50:
+                ma50 = chart_hist["Close"].rolling(50).mean()
+                fig.add_trace(go.Scatter(
+                    x=chart_hist.index, y=ma50,
+                    line=dict(color="#f39c12", width=1.5, dash="dot"),
+                    name="50-day MA",
+                    hovertemplate="50MA $%{y:.2f}<extra></extra>"
+                ))
+            if len(chart_hist) >= 200:
+                ma200 = chart_hist["Close"].rolling(200).mean()
+                fig.add_trace(go.Scatter(
+                    x=chart_hist.index, y=ma200,
+                    line=dict(color="#e74c3c", width=1.5, dash="dot"),
+                    name="200-day MA",
+                    hovertemplate="200MA $%{y:.2f}<extra></extra>"
+                ))
+            chart_start = chart_hist.index[0] if len(chart_hist) else None
+            for date_str in results.get("earnings_dates", []):
+                try:
+                    d = datetime.strptime(date_str, "%Y-%m-%d")
+                    if chart_start is not None and d >= chart_start.replace(tzinfo=None):
+                        fig.add_vline(
+                            x=date_str, line_dash="dot",
+                            line_color="rgba(90,90,180,0.45)", line_width=1.5,
+                            annotation_text="E", annotation_position="top",
+                            annotation=dict(font_size=10, font_color="rgba(90,90,180,0.7)")
+                        )
+                except Exception:
+                    pass
+
+            ymin = chart_hist["Close"].min() * 0.97
+            ymax = chart_hist["Close"].max() * 1.03
+            fig.update_layout(
+                height=280, margin=dict(l=0, r=0, t=10, b=0),
+                paper_bgcolor="white", plot_bgcolor="white", showlegend=True,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=11)),
+                xaxis=dict(showgrid=False, zeroline=False),
+                yaxis=dict(showgrid=True, gridcolor="#f5f5f5", zeroline=False, range=[ymin, ymax]),
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
             # ── Why did this miss? ────────────────────────────────────────────
             red_yellow = [(l, v, s) for l, v, s, _ in metrics if s in ("red", "yellow")]
             if red_yellow:
@@ -1285,6 +1302,13 @@ with tab1:
                     {summary}
                 </div>
             """, unsafe_allow_html=True)
+
+            # ── Recent News ───────────────────────────────────────────────────
+            headlines = results.get("news_headlines", ())
+            if headlines:
+                with st.expander(f"📰 Recent news ({len(headlines)} headlines)"):
+                    for h in headlines:
+                        st.markdown(f"- {h}")
 
 
 # ── Tab 2: Scanner ────────────────────────────────────────────────────────────
@@ -1356,9 +1380,9 @@ with tab3:
             <p class="legend-title">Fund screening legend</p>
             <div class="legend-row">
                 <span class="legend-item" style="background:#f0faf5;border-color:#2ecc71;color:#085041;">8–10 ● Core holding — overweight</span>
-                <span class="legend-item" style="background:#f0faf5;border-color:#2ecc71;color:#0F6E56;">6–7 ● Hold — market weight</span>
-                <span class="legend-item" style="background:#fffbf0;border-color:#f39c12;color:#7d5a00;">4–5 ● Trim — find alternatives</span>
-                <span class="legend-item" style="background:#fffbf0;border-color:#f39c12;color:#5a4000;">3 ● Underweight</span>
+                <span class="legend-item" style="background:#f0faf5;border-color:#2ecc71;color:#0F6E56;">6–7 ● Solid fund — hold</span>
+                <span class="legend-item" style="background:#fffbf0;border-color:#f39c12;color:#7d5a00;">4–5 ● Acceptable — compare alternatives</span>
+                <span class="legend-item" style="background:#fffbf0;border-color:#f39c12;color:#5a4000;">3 ● Usually pass</span>
                 <span class="legend-item" style="background:#fff5f5;border-color:#e74c3c;color:#922b21;">0–2 ● Avoid</span>
                 <span class="legend-item" style="background:#f0f4ff;border-color:#3a5bc7;color:#3a5bc7;">Vanguard funds only</span>
             </div>
