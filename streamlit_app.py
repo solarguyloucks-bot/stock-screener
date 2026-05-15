@@ -977,7 +977,9 @@ if not check_password():
     st.stop()
 
 # ── Layout ────────────────────────────────────────────────────────────────────
-st.image("Stonks.jpg", use_container_width=True)
+col1, col2, col3 = st.columns([1, 2, 1])
+with col2:
+    st.image("Stonks.jpg", use_container_width=True)
 
 st.markdown("""
     <div class="hero-wrap">
