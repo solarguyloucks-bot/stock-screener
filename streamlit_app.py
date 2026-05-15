@@ -266,32 +266,30 @@ def score_box(label, value_str, status, tooltip):
     """, unsafe_allow_html=True)
 
 
-def get_verdict(green_count, auto_fail):
+def get_verdict(green_count, auto_fail, scored_count=10):
     if auto_fail:
         return "Auto-fail", "#922b21", "#fff5f5", "#e74c3c"
-    if green_count >= 8:
-        return "Strong buy candidate", "#085041", "#f0faf5", "#2ecc71"
-    elif green_count >= 6:
-        return "Buy candidate",        "#0F6E56", "#f0faf5", "#2ecc71"
-    elif green_count >= 4:
-        return "Watchlist",            "#7d5a00", "#fffbf0", "#f39c12"
-    elif green_count == 3:
-        return "Usually pass",         "#5a4000", "#fffbf0", "#f39c12"
+    if scored_count == 0:
+        return "Insufficient data", "#888888", "#f8f9fa", "#cccccc"
+    ratio = green_count / scored_count
+    if ratio >= 0.75:
+        return "Buy candidate", "#085041", "#f0faf5", "#2ecc71"
+    elif ratio >= 0.50:
+        return "Watchlist",     "#7d5a00", "#fffbf0", "#f39c12"
     else:
-        return "Hard pass",            "#922b21", "#fff5f5", "#e74c3c"
+        return "Hard pass",     "#922b21", "#fff5f5", "#e74c3c"
 
 
 def show_legend():
     st.markdown("""
         <div class="legend-box">
-            <p class="legend-title">Screening legend</p>
+            <p class="legend-title">Screening legend — scored metrics only (N/A = gray, not counted)</p>
             <div class="legend-row">
-                <span class="legend-item" style="background:#f0faf5;border-color:#2ecc71;color:#085041;">8–10 ● Strong buy</span>
-                <span class="legend-item" style="background:#f0faf5;border-color:#2ecc71;color:#0F6E56;">6–7 ● Buy candidate</span>
-                <span class="legend-item" style="background:#fffbf0;border-color:#f39c12;color:#7d5a00;">4–5 ● Watchlist</span>
-                <span class="legend-item" style="background:#fffbf0;border-color:#f39c12;color:#5a4000;">3 ● Usually pass</span>
-                <span class="legend-item" style="background:#fff5f5;border-color:#e74c3c;color:#922b21;">0–2 ● Hard pass</span>
+                <span class="legend-item" style="background:#f0faf5;border-color:#2ecc71;color:#085041;">≥75% scored green ● Buy candidate</span>
+                <span class="legend-item" style="background:#fffbf0;border-color:#f39c12;color:#7d5a00;">50–74% ● Watchlist</span>
+                <span class="legend-item" style="background:#fff5f5;border-color:#e74c3c;color:#922b21;">&lt;50% ● Hard pass</span>
                 <span class="legend-item" style="background:#fff5f5;border-color:#e74c3c;color:#922b21;">⛔ FCF red + Net debt red = Auto-fail</span>
+                <span class="legend-item" style="background:#f8f9fa;border-color:#ccc;color:#999;">– Missing data, not scored</span>
             </div>
         </div>
     """, unsafe_allow_html=True)
@@ -580,14 +578,16 @@ def scan_ticker(ticker, min_cap, min_green):
         cap = info.get("marketCap", 0)
         if cap < min_cap:
             return None
-        green_count = sum(1 for k, v in results.items() if k.endswith("_status") and v == "green")
+        green_count  = sum(1 for k, v in results.items() if k.endswith("_status") and v == "green")
+        scored_count = sum(1 for k, v in results.items() if k.endswith("_status") and v != "gray"
+                           and not results.get(k.replace("_status", "_str"), "").startswith("N/A"))
         if green_count < min_green:
             return None
         auto_fail = (results.get("fcf_yield_val") is not None and
                      results.get("nd_ebitda_val") is not None and
                      results["fcf_yield_status"] == "red" and
                      results["nd_ebitda_status"] == "red")
-        verdict, _, _, _ = get_verdict(green_count, auto_fail)
+        verdict, _, _, _ = get_verdict(green_count, auto_fail, scored_count)
         cap_str = f"${round(cap/1_000_000_000, 1)}B" if cap >= 1_000_000_000 else f"${round(cap/1_000_000, 1)}M"
         return {
             "Ticker":          ticker,
@@ -614,17 +614,18 @@ def scan_ticker(ticker, min_cap, min_green):
 
 
 # ── Fund helpers ──────────────────────────────────────────────────────────────
-def get_fund_verdict(green_count):
-    if green_count >= 8:
-        return "Core holding — overweight candidate", "#085041", "#f0faf5", "#2ecc71"
-    elif green_count >= 6:
-        return "Solid fund — hold",                  "#0F6E56", "#f0faf5", "#2ecc71"
-    elif green_count >= 4:
-        return "Acceptable — compare alternatives",  "#7d5a00", "#fffbf0", "#f39c12"
-    elif green_count == 3:
-        return "Usually pass",                        "#5a4000", "#fffbf0", "#f39c12"
+def get_fund_verdict(green_count, scored_count=10):
+    if scored_count == 0:
+        return "Insufficient data",    "#888888", "#f8f9fa", "#cccccc"
+    ratio = green_count / scored_count
+    if ratio >= 0.75:
+        return "Core holding",         "#085041", "#f0faf5", "#2ecc71"
+    elif ratio >= 0.55:
+        return "Solid fund",           "#0F6E56", "#f0faf5", "#2ecc71"
+    elif ratio >= 0.35:
+        return "Compare alternatives", "#7d5a00", "#fffbf0", "#f39c12"
     else:
-        return "Avoid",                               "#922b21", "#fff5f5", "#e74c3c"
+        return "Avoid",                "#922b21", "#fff5f5", "#e74c3c"
 
 
 @st.cache_data(ttl=86400)
@@ -1123,10 +1124,11 @@ with tab1:
             for t in tickers_list:
                 _, _, r = results_data[t]
                 gc = sum(1 for k, v in r.items() if k.endswith("_status") and v == "green")
+                sc = sum(1 for key, _ in METRIC_KEYS if not r.get(f"{key}_str", "N/A").startswith("N/A"))
                 af = (r.get("fcf_yield_val") is not None and r.get("nd_ebitda_val") is not None
                       and r["fcf_yield_status"] == "red" and r["nd_ebitda_status"] == "red")
-                verd, vcol, _, _ = get_verdict(gc, af)
-                verdict_cells += f'<td style="color:{vcol};font-weight:700;">{verd}<br><small style="color:#999;">{gc}/10 green</small></td>'
+                verd, vcol, _, _ = get_verdict(gc, af, sc)
+                verdict_cells += f'<td style="color:{vcol};font-weight:700;">{verd}<br><small style="color:#999;">{gc}/{sc} green</small></td>'
             rows += f"<tr style='background:#fafafa;'><td style='font-weight:600;'>Verdict</td>{verdict_cells}</tr>"
 
             # Sector row
@@ -1192,12 +1194,13 @@ with tab1:
 
             st.markdown("<br>", unsafe_allow_html=True)
 
-            green_count = sum(1 for _, _, s, _ in metrics if s == "green")
-            auto_fail   = (results.get("fcf_yield_val") is not None and
-                           results.get("nd_ebitda_val") is not None and
-                           results["fcf_yield_status"] == "red" and
-                           results["nd_ebitda_status"] == "red")
-            verdict, text_color, bg_color, border_color = get_verdict(green_count, auto_fail)
+            green_count  = sum(1 for _, v, s, _ in metrics if s == "green")
+            scored_count = sum(1 for _, v, s, _ in metrics if not v.startswith("N/A"))
+            auto_fail    = (results.get("fcf_yield_val") is not None and
+                            results.get("nd_ebitda_val") is not None and
+                            results["fcf_yield_status"] == "red" and
+                            results["nd_ebitda_status"] == "red")
+            verdict, text_color, bg_color, border_color = get_verdict(green_count, auto_fail, scored_count)
 
             badge = (
                 '<span style="font-size:12px;background:#fff5f5;color:#922b21;padding:4px 12px;'
@@ -1211,7 +1214,7 @@ with tab1:
                 <div class="verdict-bar" style="background:{bg_color};border-color:{border_color};">
                     <div style="display:flex;align-items:center;">
                         <span class="verdict-label" style="color:{text_color};">{verdict}</span>
-                        <span class="verdict-count">{green_count} of 10 green</span>
+                        <span class="verdict-count">{green_count}/{scored_count} green{" · " + str(10 - scored_count) + " unscored" if scored_count < 10 else ""}</span>
                     </div>
                     {badge}
                 </div>
@@ -1379,11 +1382,11 @@ with tab3:
         <div class="legend-box">
             <p class="legend-title">Fund screening legend</p>
             <div class="legend-row">
-                <span class="legend-item" style="background:#f0faf5;border-color:#2ecc71;color:#085041;">8–10 ● Core holding — overweight</span>
-                <span class="legend-item" style="background:#f0faf5;border-color:#2ecc71;color:#0F6E56;">6–7 ● Solid fund — hold</span>
-                <span class="legend-item" style="background:#fffbf0;border-color:#f39c12;color:#7d5a00;">4–5 ● Acceptable — compare alternatives</span>
-                <span class="legend-item" style="background:#fffbf0;border-color:#f39c12;color:#5a4000;">3 ● Usually pass</span>
-                <span class="legend-item" style="background:#fff5f5;border-color:#e74c3c;color:#922b21;">0–2 ● Avoid</span>
+                <span class="legend-item" style="background:#f0faf5;border-color:#2ecc71;color:#085041;">≥75% scored ● Core holding</span>
+                <span class="legend-item" style="background:#f0faf5;border-color:#2ecc71;color:#0F6E56;">55–74% ● Solid fund</span>
+                <span class="legend-item" style="background:#fffbf0;border-color:#f39c12;color:#7d5a00;">35–54% ● Compare alternatives</span>
+                <span class="legend-item" style="background:#fff5f5;border-color:#e74c3c;color:#922b21;">&lt;35% ● Avoid</span>
+                <span class="legend-item" style="background:#f8f9fa;border-color:#ccc;color:#999;">– Missing data, not scored</span>
                 <span class="legend-item" style="background:#f0f4ff;border-color:#3a5bc7;color:#3a5bc7;">Vanguard funds only</span>
             </div>
         </div>
@@ -1443,8 +1446,9 @@ with tab3:
             for ft in fund_tickers_list:
                 _, _, r = fund_results_data[ft]
                 gc = sum(1 for k, v in r.items() if k.endswith("_status") and v == "green")
-                verd, vcol, _, _ = get_fund_verdict(gc)
-                fverdict_cells += f'<td style="color:{vcol};font-weight:700;">{verd}<br><small style="color:#999;">{gc}/10 green</small></td>'
+                sc = sum(1 for key, _ in FUND_METRIC_KEYS if not r.get(f"{key}_str", "N/A").startswith("N/A"))
+                verd, vcol, _, _ = get_fund_verdict(gc, sc)
+                fverdict_cells += f'<td style="color:{vcol};font-weight:700;">{verd}<br><small style="color:#999;">{gc}/{sc} green</small></td>'
             frows += f"<tr style='background:#fafafa;'><td style='font-weight:600;'>Verdict</td>{fverdict_cells}</tr>"
 
             # Category row
@@ -1568,14 +1572,15 @@ with tab3:
 
             st.markdown("<br>", unsafe_allow_html=True)
 
-            fgreen_count = sum(1 for _, _, s, _ in fmetrics if s == "green")
-            fverdict, ftext_color, fbg_color, fborder_color = get_fund_verdict(fgreen_count)
+            fgreen_count  = sum(1 for _, v, s, _ in fmetrics if s == "green")
+            fscored_count = sum(1 for _, v, s, _ in fmetrics if not v.startswith("N/A"))
+            fverdict, ftext_color, fbg_color, fborder_color = get_fund_verdict(fgreen_count, fscored_count)
 
             st.markdown(f"""
                 <div class="verdict-bar" style="background:{fbg_color};border-color:{fborder_color};">
                     <div style="display:flex;align-items:center;">
                         <span class="verdict-label" style="color:{ftext_color};">{fverdict}</span>
-                        <span class="verdict-count">{fgreen_count} of 10 green</span>
+                        <span class="verdict-count">{fgreen_count}/{fscored_count} green{" · " + str(10 - fscored_count) + " unscored" if fscored_count < 10 else ""}</span>
                     </div>
                     <span style="font-size:12px;background:#f0f4ff;color:#3a5bc7;padding:4px 12px;
                           border-radius:20px;border:1px solid #3a5bc7;font-weight:600;">🏦 Vanguard</span>
