@@ -590,15 +590,15 @@ def scan_ticker(ticker, min_cap, min_green):
 # ── Fund helpers ──────────────────────────────────────────────────────────────
 def get_fund_verdict(green_count):
     if green_count >= 8:
-        return "Strong core holding", "#085041", "#f0faf5", "#2ecc71"
+        return "Core holding — overweight", "#085041", "#f0faf5", "#2ecc71"
     elif green_count >= 6:
-        return "Good holding",        "#0F6E56", "#f0faf5", "#2ecc71"
+        return "Hold — market weight",      "#0F6E56", "#f0faf5", "#2ecc71"
     elif green_count >= 4:
-        return "Consider alternatives","#7d5a00", "#fffbf0", "#f39c12"
+        return "Trim — find alternatives",  "#7d5a00", "#fffbf0", "#f39c12"
     elif green_count == 3:
-        return "Below average",        "#5a4000", "#fffbf0", "#f39c12"
+        return "Underweight",               "#5a4000", "#fffbf0", "#f39c12"
     else:
-        return "Avoid",                "#922b21", "#fff5f5", "#e74c3c"
+        return "Avoid",                     "#922b21", "#fff5f5", "#e74c3c"
 
 
 def get_fund_summary(ticker, name, verdict, green_count, metrics):
@@ -653,22 +653,45 @@ Lead each with the metric name in bold. No preamble, no summary. Write like you'
 @st.cache_data(ttl=86400)
 def analyze_fund(ticker):
     with _yf_semaphore:
-        fund   = yf.Ticker(ticker)
-        info   = fund.info
-        hist   = fund.history(period="max")
+        fund = yf.Ticker(ticker)
+        info = fund.info
+        hist = fund.history(period="max")
         time.sleep(0.3)
 
     if not info or len(info) < 5:
         raise RuntimeError(f"No data for {ticker}")
 
     # Vanguard check — fundFamily is None for mutual funds, so also check longName/shortName
-    family    = info.get("fundFamily",  "") or ""
-    long_name = info.get("longName",    "") or ""
-    short_name= info.get("shortName",   "") or ""
+    family     = info.get("fundFamily",  "") or ""
+    long_name  = info.get("longName",    "") or ""
+    short_name = info.get("shortName",   "") or ""
     if not any("vanguard" in s.lower() for s in [family, long_name, short_name]):
         raise ValueError(f"{ticker} does not appear to be a Vanguard fund. Only Vanguard tickers are supported.")
 
-    results = {}
+    category = info.get("category", "") or ""
+    results  = {}
+
+    # Determine appropriate benchmark based on fund category
+    cat_lower = category.lower()
+    if any(k in cat_lower for k in ["bond", "fixed", "income", "treasury", "corporate", "inflation", "muni"]):
+        bench_ticker = "AGG"
+    elif any(k in cat_lower for k in ["international", "foreign", "world", "global", "emerging"]):
+        bench_ticker = "VXUS"
+    else:
+        bench_ticker = "SPY"
+
+    # Fetch benchmark history once (used for 5Y and 10Y comparisons)
+    bench_hist = None
+    try:
+        with _yf_semaphore:
+            bench_hist = yf.Ticker(bench_ticker).history(period="max")
+            time.sleep(0.2)
+    except Exception:
+        pass
+
+    # Timezone-aware "now" for hist slicing
+    tz  = hist.index.tz if len(hist) > 0 else None
+    now = pd.Timestamp.now(tz=tz) if tz else pd.Timestamp.now()
 
     # 1. Expense Ratio
     try:
@@ -682,54 +705,133 @@ def analyze_fund(ticker):
             results["expense_ratio_str"]    = "N/A"
             results["expense_ratio_status"] = "yellow"
             results["expense_ratio_val"]    = None
-    except:
+    except Exception:
         results["expense_ratio_str"]    = "N/A"
         results["expense_ratio_status"] = "yellow"
         results["expense_ratio_val"]    = None
 
-    # 2. 3Y Avg Return
+    # 2. Load / 12b-1 Fee
     try:
-        r3 = info.get("threeYearAverageReturn")
-        if r3 is not None:
-            pct = round(r3 * 100, 2)
-            results["return_3y_str"]    = f"{pct}%"
-            results["return_3y_status"] = "green" if pct > 10 else "yellow" if pct >= 5 else "red"
+        front_load = info.get("maxFrontEndSalesLoad") or 0
+        back_load  = info.get("maxDeferredSalesLoad") or 0
+        twelve_b1  = info.get("twelveB1") or 0
+        if front_load > 0 or back_load > 0:
+            pct = round(max(front_load, back_load) * 100, 2)
+            results["load_str"]    = f"Load {pct}%"
+            results["load_status"] = "red"
+        elif twelve_b1 > 0:
+            b1_pct = round(twelve_b1 * 100, 3)
+            results["load_str"]    = f"12b-1: {b1_pct}%"
+            results["load_status"] = "yellow" if twelve_b1 <= 0.0025 else "red"
         else:
-            results["return_3y_str"]    = "N/A"
-            results["return_3y_status"] = "red"
-    except:
-        results["return_3y_str"]    = "N/A"
-        results["return_3y_status"] = "red"
+            results["load_str"]    = "No load"
+            results["load_status"] = "green"
+    except Exception:
+        results["load_str"]    = "N/A"
+        results["load_status"] = "yellow"
 
-    # 3. 5Y Avg Return
+    # Helper: calculate total return for a history slice
+    def _total_return(h):
+        h = h.dropna(subset=["Close"])
+        if len(h) < 20:
+            return None
+        return (h["Close"].iloc[-1] / h["Close"].iloc[0] - 1) * 100
+
+    # 3. 5Y Return vs Benchmark
     try:
-        r5 = info.get("fiveYearAverageReturn")
-        if r5 is not None:
-            pct = round(r5 * 100, 2)
-            results["return_5y_str"]    = f"{pct}%"
-            results["return_5y_status"] = "green" if pct > 10 else "yellow" if pct >= 5 else "red"
+        cutoff_5y   = now - pd.DateOffset(years=5)
+        fund_5y_ret = _total_return(hist[hist.index >= cutoff_5y])
+        if fund_5y_ret is not None and bench_hist is not None:
+            b_tz        = bench_hist.index.tz if len(bench_hist) > 0 else None
+            b_now       = pd.Timestamp.now(tz=b_tz) if b_tz else pd.Timestamp.now()
+            bench_5y    = bench_hist[bench_hist.index >= (b_now - pd.DateOffset(years=5))]
+            bench_5y_ret = _total_return(bench_5y)
+            if bench_5y_ret is not None:
+                diff = fund_5y_ret - bench_5y_ret
+                sign = "+" if diff >= 0 else ""
+                results["return_5y_str"]    = f"{round(fund_5y_ret, 1)}% ({sign}{round(diff, 1)}% vs {bench_ticker})"
+                results["return_5y_status"] = "green" if diff >= -2 else "yellow" if diff >= -8 else "red"
+            else:
+                results["return_5y_str"]    = f"{round(fund_5y_ret, 1)}%"
+                results["return_5y_status"] = "yellow"
+        elif fund_5y_ret is not None:
+            results["return_5y_str"]    = f"{round(fund_5y_ret, 1)}%"
+            results["return_5y_status"] = "yellow"
         else:
-            results["return_5y_str"]    = "N/A"
-            results["return_5y_status"] = "red"
-    except:
+            results["return_5y_str"]    = "N/A (<5Y old)"
+            results["return_5y_status"] = "yellow"
+    except Exception:
         results["return_5y_str"]    = "N/A"
-        results["return_5y_status"] = "red"
+        results["return_5y_status"] = "yellow"
 
-    # 4. YTD Return
+    # 4. 10Y Return vs Benchmark
     try:
-        ytd = info.get("ytdReturn")
-        if ytd is not None:
-            pct = round(ytd * 100, 2)
-            results["ytd_return_str"]    = f"{pct}%"
-            results["ytd_return_status"] = "green" if pct > 0 else "yellow" if pct >= -5 else "red"
+        cutoff_10y   = now - pd.DateOffset(years=10)
+        fund_10y_ret = _total_return(hist[hist.index >= cutoff_10y])
+        if fund_10y_ret is not None and bench_hist is not None:
+            b_tz         = bench_hist.index.tz if len(bench_hist) > 0 else None
+            b_now        = pd.Timestamp.now(tz=b_tz) if b_tz else pd.Timestamp.now()
+            bench_10y    = bench_hist[bench_hist.index >= (b_now - pd.DateOffset(years=10))]
+            bench_10y_ret = _total_return(bench_10y)
+            if bench_10y_ret is not None:
+                diff = fund_10y_ret - bench_10y_ret
+                sign = "+" if diff >= 0 else ""
+                results["return_10y_str"]    = f"{round(fund_10y_ret, 1)}% ({sign}{round(diff, 1)}% vs {bench_ticker})"
+                results["return_10y_status"] = "green" if diff >= -2 else "yellow" if diff >= -10 else "red"
+            else:
+                results["return_10y_str"]    = f"{round(fund_10y_ret, 1)}%"
+                results["return_10y_status"] = "yellow"
+        elif fund_10y_ret is not None:
+            results["return_10y_str"]    = f"{round(fund_10y_ret, 1)}%"
+            results["return_10y_status"] = "yellow"
         else:
-            results["ytd_return_str"]    = "N/A"
-            results["ytd_return_status"] = "yellow"
-    except:
-        results["ytd_return_str"]    = "N/A"
-        results["ytd_return_status"] = "yellow"
+            results["return_10y_str"]    = "N/A (<10Y old)"
+            results["return_10y_status"] = "yellow"
+    except Exception:
+        results["return_10y_str"]    = "N/A"
+        results["return_10y_status"] = "yellow"
 
-    # 5. Beta (3Y)
+    # 5. Sharpe Ratio (3Y, risk-free = 4.5%)
+    try:
+        cutoff_3y = now - pd.DateOffset(years=3)
+        hist_3y   = hist[hist.index >= cutoff_3y].dropna(subset=["Close"])
+        if len(hist_3y) >= 60:
+            daily_ret  = hist_3y["Close"].pct_change().dropna()
+            annual_ret = daily_ret.mean() * 252 * 100
+            annual_std = daily_ret.std() * (252 ** 0.5) * 100
+            sharpe     = (annual_ret - 4.5) / annual_std if annual_std > 0 else None
+            if sharpe is not None:
+                results["sharpe_str"]    = f"{round(sharpe, 2)}"
+                results["sharpe_status"] = "green" if sharpe >= 1.0 else "yellow" if sharpe >= 0.5 else "red"
+            else:
+                results["sharpe_str"]    = "N/A"
+                results["sharpe_status"] = "yellow"
+        else:
+            results["sharpe_str"]    = "N/A"
+            results["sharpe_status"] = "yellow"
+    except Exception:
+        results["sharpe_str"]    = "N/A"
+        results["sharpe_status"] = "yellow"
+
+    # 6. Max Drawdown (3Y)
+    try:
+        cutoff_3y = now - pd.DateOffset(years=3)
+        hist_3y   = hist[hist.index >= cutoff_3y].dropna(subset=["Close"])
+        if len(hist_3y) >= 20:
+            prices    = hist_3y["Close"]
+            peak      = prices.expanding().max()
+            drawdowns = (prices - peak) / peak * 100
+            max_dd    = drawdowns.min()
+            results["max_dd_str"]    = f"{round(max_dd, 1)}%"
+            results["max_dd_status"] = "green" if max_dd > -15 else "yellow" if max_dd > -25 else "red"
+        else:
+            results["max_dd_str"]    = "N/A"
+            results["max_dd_status"] = "yellow"
+    except Exception:
+        results["max_dd_str"]    = "N/A"
+        results["max_dd_status"] = "yellow"
+
+    # 7. Beta (3Y)
     try:
         beta = info.get("beta3Year") or info.get("beta")
         if beta is not None:
@@ -740,12 +842,12 @@ def analyze_fund(ticker):
             results["beta_str"]    = "N/A"
             results["beta_status"] = "yellow"
             results["beta_val"]    = None
-    except:
+    except Exception:
         results["beta_str"]    = "N/A"
         results["beta_status"] = "yellow"
         results["beta_val"]    = None
 
-    # 6. Turnover Rate
+    # 8. Turnover Ratio
     try:
         turn = info.get("turnoverRatio")
         if turn is not None:
@@ -755,102 +857,74 @@ def analyze_fund(ticker):
         else:
             results["turnover_str"]    = "N/A"
             results["turnover_status"] = "yellow"
-    except:
+    except Exception:
         results["turnover_str"]    = "N/A"
         results["turnover_status"] = "yellow"
 
-    # 7. AUM
+    # 9. AUM
     try:
         aum = info.get("totalAssets")
         if aum is not None:
-            if aum >= 1_000_000_000:
-                results["aum_str"] = f"${round(aum/1_000_000_000, 1)}B"
-            else:
-                results["aum_str"] = f"${round(aum/1_000_000, 1)}M"
+            results["aum_str"]    = f"${round(aum/1_000_000_000, 1)}B" if aum >= 1_000_000_000 else f"${round(aum/1_000_000, 1)}M"
             results["aum_status"] = "green" if aum >= 10_000_000_000 else "yellow" if aum >= 1_000_000_000 else "red"
         else:
             results["aum_str"]    = "N/A"
             results["aum_status"] = "yellow"
-    except:
+    except Exception:
         results["aum_str"]    = "N/A"
         results["aum_status"] = "yellow"
 
-    # 8. Morningstar Rating
+    # 10. Top 10 Holdings Concentration
     try:
-        ms = info.get("morningStarOverallRating")
-        if ms is not None:
-            stars = "★" * int(ms) + "☆" * (5 - int(ms))
-            results["ms_rating_str"]    = stars
-            results["ms_rating_status"] = "green" if ms >= 4 else "yellow" if ms == 3 else "red"
+        top_h = fund.top_holdings
+        if top_h is not None and not top_h.empty:
+            col = "holdingPercent" if "holdingPercent" in top_h.columns else top_h.columns[0]
+            top10_pct = top_h[col].head(10).sum()
+            top10_pct = top10_pct * 100 if top10_pct <= 1 else top10_pct
+            results["concentration_str"]    = f"{round(top10_pct, 1)}%"
+            results["concentration_status"] = "green" if top10_pct < 25 else "yellow" if top10_pct <= 40 else "red"
         else:
-            results["ms_rating_str"]    = "N/A"
-            results["ms_rating_status"] = "yellow"
-    except:
-        results["ms_rating_str"]    = "N/A"
-        results["ms_rating_status"] = "yellow"
-
-    # 9. Dividend Yield
-    try:
-        yld = info.get("yield") or info.get("dividendYield")
-        if yld is not None:
-            pct = round(yld * 100, 2) if yld < 1 else round(yld, 2)
-            results["div_yield_str"]    = f"{pct}%"
-            results["div_yield_status"] = "green" if pct > 2 else "yellow" if pct >= 0.5 else "red"
-        else:
-            results["div_yield_str"]    = "N/A"
-            results["div_yield_status"] = "yellow"
-    except:
-        results["div_yield_str"]    = "N/A"
-        results["div_yield_status"] = "yellow"
-
-    # 10. Morningstar Risk Rating
-    try:
-        risk = info.get("morningStarRiskRating")
-        if risk is not None:
-            risk_labels = {1: "Very Low", 2: "Low", 3: "Medium", 4: "High", 5: "Very High"}
-            results["risk_str"]    = f"{risk} ({risk_labels.get(risk, '')})"
-            results["risk_status"] = "green" if risk <= 2 else "yellow" if risk == 3 else "red"
-        else:
-            results["risk_str"]    = "N/A"
-            results["risk_status"] = "yellow"
-    except:
-        results["risk_str"]    = "N/A"
-        results["risk_status"] = "yellow"
+            results["concentration_str"]    = "N/A"
+            results["concentration_status"] = "yellow"
+    except Exception:
+        results["concentration_str"]    = "N/A"
+        results["concentration_status"] = "yellow"
 
     # Metadata for header
-    results["category"]      = info.get("category", "N/A")
-    results["fund_family"]   = info.get("fundFamily", "N/A")
-    results["inception_date"]= info.get("fundInceptionDate", None)
-    results["legal_type"]    = info.get("legalType", "N/A")
+    results["category"]       = info.get("category", "N/A")
+    results["fund_family"]    = info.get("fundFamily", "N/A")
+    results["inception_date"] = info.get("fundInceptionDate", None)
+    results["legal_type"]     = info.get("legalType", "N/A")
+    results["benchmark"]      = bench_ticker
 
     _cache_timestamps[ticker] = datetime.now()
     return info, hist, results
 
 
 FUND_METRIC_KEYS = [
-    ("Expense ratio",      "expense_ratio"),
-    ("3Y avg return",      "return_3y"),
-    ("5Y avg return",      "return_5y"),
-    ("YTD return",         "ytd_return"),
-    ("Beta (3Y)",          "beta"),
-    ("Turnover rate",      "turnover"),
-    ("AUM",                "aum"),
-    ("Morningstar rating", "ms_rating"),
-    ("Dividend yield",     "div_yield"),
-    ("Risk rating",        "risk"),
+    ("Expense ratio",        "expense_ratio"),
+    ("Load / 12b-1",         "load"),
+    ("5Y vs benchmark",      "return_5y"),
+    ("10Y vs benchmark",     "return_10y"),
+    ("Sharpe ratio (3Y)",    "sharpe"),
+    ("Max drawdown (3Y)",    "max_dd"),
+    ("Beta (3Y)",            "beta"),
+    ("Turnover ratio",       "turnover"),
+    ("AUM",                  "aum"),
+    ("Top 10 concentration", "concentration"),
 ]
 
 FUND_METRIC_TOOLTIPS = [
-    "Annual fee charged by the fund. Vanguard's index funds are typically ≤0.10% — a key advantage.",
-    "Average annualized return over 3 years. Above 10% is strong for diversified funds.",
-    "Average annualized return over 5 years. More reliable than 3Y for long-term assessment.",
-    "Return so far this calendar year. Negative YTD isn't a dealbreaker but context matters.",
-    "3-year beta vs the market. 1.0 = moves with market. <1 = lower volatility. >1 = more volatile.",
-    "How often the fund trades its holdings. Low turnover = lower costs and better tax efficiency.",
-    "Total assets under management. Larger funds are more liquid and less likely to close.",
-    "Morningstar's star rating (1–5). Based on risk-adjusted returns vs category peers.",
-    "Annual income distributed as dividends. Higher yield = more income, but not always better.",
-    "Morningstar's risk rating (1=Very Low, 5=Very High). Lower is safer for core holdings.",
+    "Annual fee charged. Vanguard index funds typically ≤0.10% — a major competitive advantage over active peers.",
+    "Sales load (front-end/deferred) or 12b-1 distribution fee. No-load + no 12b-1 is the gold standard for cost efficiency.",
+    "Fund's 5-year total return vs its category benchmark (SPY, AGG, or VXUS). Within 2% of benchmark is solid for index funds.",
+    "Fund's 10-year total return vs benchmark. The full cycle reveals whether outperformance is real or luck.",
+    "3-year risk-adjusted return: (annual return − 4.5% risk-free rate) ÷ annual volatility. Above 1.0 is strong.",
+    "Worst peak-to-trough drawdown over 3 years. A fund that crashes harder than peers destroys compounded wealth.",
+    "3-year beta vs the market. 1.0 = moves with market. Matters for portfolio construction and risk budgeting.",
+    "How often the fund trades. Low turnover = lower costs, less tax drag, and less manager interference.",
+    "Total assets under management. Larger funds have tighter spreads, more liquidity, and lower closure risk.",
+    "% held by top 10 positions. High concentration = sector or stock-specific risk masquerading as diversification.",
 ]
 
 # ── Pre-warm popular tickers on startup ───────────────────────────────────────
@@ -1251,10 +1325,10 @@ with tab3:
         <div class="legend-box">
             <p class="legend-title">Fund screening legend</p>
             <div class="legend-row">
-                <span class="legend-item" style="background:#f0faf5;border-color:#2ecc71;color:#085041;">8–10 ● Strong core holding</span>
-                <span class="legend-item" style="background:#f0faf5;border-color:#2ecc71;color:#0F6E56;">6–7 ● Good holding</span>
-                <span class="legend-item" style="background:#fffbf0;border-color:#f39c12;color:#7d5a00;">4–5 ● Consider alternatives</span>
-                <span class="legend-item" style="background:#fffbf0;border-color:#f39c12;color:#5a4000;">3 ● Below average</span>
+                <span class="legend-item" style="background:#f0faf5;border-color:#2ecc71;color:#085041;">8–10 ● Core holding — overweight</span>
+                <span class="legend-item" style="background:#f0faf5;border-color:#2ecc71;color:#0F6E56;">6–7 ● Hold — market weight</span>
+                <span class="legend-item" style="background:#fffbf0;border-color:#f39c12;color:#7d5a00;">4–5 ● Trim — find alternatives</span>
+                <span class="legend-item" style="background:#fffbf0;border-color:#f39c12;color:#5a4000;">3 ● Underweight</span>
                 <span class="legend-item" style="background:#fff5f5;border-color:#e74c3c;color:#922b21;">0–2 ● Avoid</span>
                 <span class="legend-item" style="background:#f0f4ff;border-color:#3a5bc7;color:#3a5bc7;">Vanguard funds only</span>
             </div>
