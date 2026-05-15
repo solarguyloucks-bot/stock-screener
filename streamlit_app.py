@@ -90,7 +90,7 @@ st.set_page_config(page_title="Stock Screener", layout="wide")
 st.markdown("""
 <style>
     .main { background-color: #ffffff; }
-    .block-container { padding-top: 2rem; padding-bottom: 2rem; max-width: 1200px; }
+    .block-container { padding-top: 2rem; padding-bottom: 2rem; max-width: 1100px; padding-left: 1.5rem; padding-right: 1.5rem; }
 
     .scorecard-box {
         border-radius: 10px;
@@ -331,17 +331,23 @@ def get_executive_summary(ticker, name, verdict, green_count, metrics, current_p
 
 {price_line}{metric_lines}
 {news_section}
-Screening verdict: {verdict} ({green_count}/10 green)
+Screening verdict: {verdict} ({green_count}/{scored_count} scored green)
 
-Lead with a clear BUY / SELL / HOLD call and a one-line rationale. Then write 3-4 sentences of sharp analyst judgment:
-- What does this data tell you about the QUALITY and DURABILITY of this business?
-- What is the key bull vs. bear tension right now, incorporating any relevant news context above?
-- What is your price conviction — would you be adding, trimming, or watching from the sidelines?
-- What single catalyst would change your rating?
+Output in exactly this format — no deviation:
 
-IMPORTANT: If you state a price target, it must be ABOVE the current price for a BUY, BELOW for a SELL, and near current for a HOLD. Do not contradict your own rating with the target.
+**Bottom line:** [BUY / SELL / HOLD] — [one sentence conviction statement with specific numbers]
 
-Write exactly like an MD presenting to the investment committee at 7am. Blunt, confident, specific numbers. No hedging, no caveats, no bullet points, no headers. Plain prose only. If the data screams avoid, say so."""
+**Why:**
+• [key strength or bull point with a specific metric]
+• [key risk or bear point with a specific metric]
+• [price conviction — adding, trimming, or watching, with a target if BUY/SELL]
+
+**What would change my view:**
+• [single most important catalyst that would flip the rating]
+
+[Then 2-3 sentences of sharp MD-level context: quality of the business, bull/bear tension, any relevant news. Blunt, no hedging.]
+
+IMPORTANT: If you state a price target, it must be ABOVE current price for BUY, BELOW for SELL. Do not contradict your rating."""
     return _claude_call(prompt, 1000)
 
 
@@ -590,24 +596,20 @@ def scan_ticker(ticker, min_cap, min_green):
         verdict, _, _, _ = get_verdict(green_count, auto_fail, scored_count)
         cap_str = f"${round(cap/1_000_000_000, 1)}B" if cap >= 1_000_000_000 else f"${round(cap/1_000_000, 1)}M"
         return {
-            "Ticker":          ticker,
-            "Company":         info.get("longName", "N/A"),
-            "Sector":          results.get("sector", "N/A"),
-            "Market Cap":      cap_str,
-            "Green Boxes":     green_count,
-            "Verdict":         verdict,
-            "FCF Yield":       results["fcf_yield_str"],
-            "Rev CAGR":        results["rev_cagr_str"],
-            "ROIC":            results["roic_str"],
-            "Op Margin":       results["margin_trend_str"],
+            "Ticker":        ticker,
+            "Company":       info.get("longName", "N/A"),
+            "Sector":        results.get("sector", "N/A"),
+            "Verdict":       verdict,
+            "Score":         f"{green_count}/{scored_count}",
+            "Auto-fail":     "⛔ Yes" if auto_fail else "✓ No",
+            "Market Cap":    cap_str,
+            "FCF Yield":     results["fcf_yield_str"],
+            "ROIC":          results["roic_str"],
+            "PEG":           results["peg_str"],
+            "Gross Margin":  results["gross_margin_str"],
             "Net Debt/EBITDA": results["nd_ebitda_str"],
-            "FCF Conv":        results["fcf_conversion_str"],
-            "PEG":             results["peg_str"],
-            "Gross Margin":    results["gross_margin_str"],
-            "Earnings":        results["earnings_consistency_str"],
-            "Insider %":       results["insider_str"],
-            "_green_raw":      green_count,
-            "_cap_raw":        cap,
+            "_green_raw":    green_count,
+            "_cap_raw":      cap,
         }
     except:
         return None
@@ -635,15 +637,21 @@ def get_fund_summary(ticker, name, verdict, green_count, metrics):
 
 {metric_lines}
 
-Verdict: {verdict} ({green_count}/10 green)
+Verdict: {verdict} ({green_count}/{scored_count} scored green)
 
-Lead with a clear CORE HOLD / OVERWEIGHT / TRIM / AVOID call and a one-line rationale. Then write 3-4 sentences of sharp, institutional-quality judgment:
-- What does this fund's cost, risk, and return profile say about its role in a diversified allocation?
-- Is the risk-adjusted return worth it versus the benchmark or alternatives?
-- Who should own this — and who should not?
-- What single data point would change your rating?
+Output in exactly this format — no deviation:
 
-Write exactly like an MD presenting at 7am. Blunt, specific, no hedging. Plain prose, no bullets, no headers. If the data says avoid it, say so directly."""
+**Bottom line:** [CORE HOLD / OVERWEIGHT / COMPARE ALTERNATIVES / AVOID] — [one sentence on why, specific to this fund's cost and return profile]
+
+**Why:**
+• [key strength: cost, AUM, turnover, or return metric with specific number]
+• [key concern: benchmark gap, drawdown, or missing data]
+• [who this is right for — e.g. "core U.S. equity sleeve, long-term buy-and-hold"]
+
+**What would change my view:**
+• [single data point or event that would flip the rating]
+
+[Then 1-2 sentences of sharp context. Is this a reliable vehicle for the exposure it claims? Blunt, no jargon.]"""
     return _claude_call(prompt, 900)
 
 
@@ -1005,7 +1013,7 @@ if not check_password():
 _has_results = bool(st.session_state.get("results_data") or st.session_state.get("fund_results"))
 
 if not _has_results:
-    col1, col2, col3 = st.columns([1, 4, 1])
+    col1, col2, col3 = st.columns([1, 3, 1])
     with col2:
         st.image("Stonks.jpg", use_container_width=True)
     st.markdown("""
@@ -1202,21 +1210,40 @@ with tab1:
                             results["nd_ebitda_status"] == "red")
             verdict, text_color, bg_color, border_color = get_verdict(green_count, auto_fail, scored_count)
 
-            badge = (
-                '<span style="font-size:12px;background:#fff5f5;color:#922b21;padding:4px 12px;'
+            strengths = [lbl for lbl, val, s, _ in metrics if s == "green"][:3]
+            concerns  = [lbl for lbl, val, s, _ in metrics if s in ("red", "yellow")][:3]
+            unscored  = 10 - scored_count
+
+            af_badge = (
+                '<span style="font-size:11px;background:#fff5f5;color:#922b21;padding:3px 10px;'
                 'border-radius:20px;border:1px solid #e74c3c;font-weight:600;">⛔ Auto-fail</span>'
                 if auto_fail else
-                '<span style="font-size:12px;background:#f0faf5;color:#085041;padding:4px 12px;'
+                '<span style="font-size:11px;background:#f0faf5;color:#085041;padding:3px 10px;'
                 'border-radius:20px;border:1px solid #2ecc71;font-weight:600;">✓ No auto-fail</span>'
+            )
+            strengths_html = (
+                f'<div style="font-size:12px;color:#085041;margin-top:4px;">'
+                f'<b>Strengths:</b> {", ".join(strengths)}</div>' if strengths else ""
+            )
+            concerns_html = (
+                f'<div style="font-size:12px;color:#922b21;margin-top:2px;">'
+                f'<b>Concerns:</b> {", ".join(concerns)}</div>' if concerns else ""
+            )
+            unscored_html = (
+                f'<div style="font-size:11px;color:#aaa;margin-top:2px;">{unscored} metric{"s" if unscored != 1 else ""} missing data</div>'
+                if unscored > 0 else ""
             )
 
             st.markdown(f"""
-                <div class="verdict-bar" style="background:{bg_color};border-color:{border_color};">
-                    <div style="display:flex;align-items:center;">
-                        <span class="verdict-label" style="color:{text_color};">{verdict}</span>
-                        <span class="verdict-count">{green_count}/{scored_count} green{" · " + str(10 - scored_count) + " unscored" if scored_count < 10 else ""}</span>
+                <div class="verdict-bar" style="background:{bg_color};border-color:{border_color};flex-direction:column;align-items:flex-start;gap:4px;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;width:100%;">
+                        <div style="display:flex;align-items:center;gap:10px;">
+                            <span class="verdict-label" style="color:{text_color};">{verdict}</span>
+                            <span class="verdict-count">{green_count}/{scored_count} green</span>
+                        </div>
+                        {af_badge}
                     </div>
-                    {badge}
+                    {strengths_html}{concerns_html}{unscored_html}
                 </div>
             """, unsafe_allow_html=True)
 
@@ -1432,6 +1459,11 @@ with tab3:
             fheader = "".join([f"<th>{t}</th>" for t in fund_tickers_list])
             frows = ""
             for label, key in FUND_METRIC_KEYS:
+                # Use first fund's benchmark for comparison table label
+                first_r   = fund_results_data[fund_tickers_list[0]][2]
+                b         = first_r.get("benchmark", "index")
+                bn        = {"SPY": "S&P 500", "AGG": "AGG (bonds)", "VXUS": "VXUS (intl)"}.get(b, b)
+                disp_lbl  = {"return_5y": f"5Y vs {bn}", "return_10y": f"10Y vs {bn}"}.get(key, label)
                 cells = ""
                 for ft in fund_tickers_list:
                     _, _, r = fund_results_data[ft]
@@ -1439,7 +1471,7 @@ with tab3:
                     status = r.get(f"{key}_status", "yellow")
                     color  = STATUS_COLOR.get(status, "#888")
                     cells += f'<td style="color:{color};font-weight:600;">{val}</td>'
-                frows += f"<tr><td style='color:#666;'>{label}</td>{cells}</tr>"
+                frows += f"<tr><td style='color:#666;'>{disp_lbl}</td>{cells}</tr>"
 
             # Verdict row
             fverdict_cells = ""
@@ -1558,8 +1590,11 @@ with tab3:
 
             # ── Scorecard ─────────────────────────────────────────────────────
             st.markdown('<p class="section-header">Scorecard</p>', unsafe_allow_html=True)
+            _bench      = fresults.get("benchmark", "index")
+            _bench_name = {"SPY": "S&P 500", "AGG": "AGG (bonds)", "VXUS": "VXUS (intl)"}.get(_bench, _bench)
+            _bench_lbl  = {"return_5y": f"5Y vs {_bench_name}", "return_10y": f"10Y vs {_bench_name}"}
             fmetrics = [
-                (label, fresults.get(f"{key}_str", "N/A"), fresults.get(f"{key}_status", "yellow"), tip)
+                (_bench_lbl.get(key, label), fresults.get(f"{key}_str", "N/A"), fresults.get(f"{key}_status", "yellow"), tip)
                 for (label, key), tip in zip(FUND_METRIC_KEYS, FUND_METRIC_TOOLTIPS)
             ]
 
@@ -1576,14 +1611,34 @@ with tab3:
             fscored_count = sum(1 for _, v, s, _ in fmetrics if not v.startswith("N/A"))
             fverdict, ftext_color, fbg_color, fborder_color = get_fund_verdict(fgreen_count, fscored_count)
 
+            fstrengths = [lbl for lbl, val, s, _ in fmetrics if s == "green"][:3]
+            fconcerns  = [lbl for lbl, val, s, _ in fmetrics if s in ("red", "yellow")][:3]
+            funscored  = 10 - fscored_count
+
+            fstrengths_html = (
+                f'<div style="font-size:12px;color:#085041;margin-top:4px;">'
+                f'<b>Strengths:</b> {", ".join(fstrengths)}</div>' if fstrengths else ""
+            )
+            fconcerns_html = (
+                f'<div style="font-size:12px;color:#922b21;margin-top:2px;">'
+                f'<b>Concerns:</b> {", ".join(fconcerns)}</div>' if fconcerns else ""
+            )
+            funscored_html = (
+                f'<div style="font-size:11px;color:#aaa;margin-top:2px;">{funscored} metric{"s" if funscored != 1 else ""} missing data</div>'
+                if funscored > 0 else ""
+            )
+
             st.markdown(f"""
-                <div class="verdict-bar" style="background:{fbg_color};border-color:{fborder_color};">
-                    <div style="display:flex;align-items:center;">
-                        <span class="verdict-label" style="color:{ftext_color};">{fverdict}</span>
-                        <span class="verdict-count">{fgreen_count}/{fscored_count} green{" · " + str(10 - fscored_count) + " unscored" if fscored_count < 10 else ""}</span>
+                <div class="verdict-bar" style="background:{fbg_color};border-color:{fborder_color};flex-direction:column;align-items:flex-start;gap:4px;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;width:100%;">
+                        <div style="display:flex;align-items:center;gap:10px;">
+                            <span class="verdict-label" style="color:{ftext_color};">{fverdict}</span>
+                            <span class="verdict-count">{fgreen_count}/{fscored_count} green</span>
+                        </div>
+                        <span style="font-size:11px;background:#f0f4ff;color:#3a5bc7;padding:3px 10px;
+                              border-radius:20px;border:1px solid #3a5bc7;font-weight:600;">🏦 Vanguard</span>
                     </div>
-                    <span style="font-size:12px;background:#f0f4ff;color:#3a5bc7;padding:4px 12px;
-                          border-radius:20px;border:1px solid #3a5bc7;font-weight:600;">🏦 Vanguard</span>
+                    {fstrengths_html}{fconcerns_html}{funscored_html}
                 </div>
             """, unsafe_allow_html=True)
 
