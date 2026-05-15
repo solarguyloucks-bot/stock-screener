@@ -316,19 +316,19 @@ def _claude_call(prompt, max_tokens=1000):
 
 def get_executive_summary(ticker, name, verdict, green_count, metrics):
     metric_lines = "\n".join([f"- {label}: {val} ({status})" for label, val, status, _ in metrics])
-    prompt = f"""You are a senior investment analyst at a value-focused fund. You have just run {ticker} ({name}) through a 10-metric screening framework and received these results:
+    prompt = f"""You are a Managing Director at a top-tier Wall Street equity research desk — think Goldman, Morgan Stanley, or Bernstein. You have just run {ticker} ({name}) through a 10-metric quantitative screen:
 
 {metric_lines}
 
-Overall verdict: {verdict} ({green_count} of 10 green boxes)
+Screening verdict: {verdict} ({green_count}/10 green)
 
-Do NOT restate the metrics. Instead write 3-4 sentences of genuine analyst judgment:
-- What does this combination of signals tell you about the QUALITY of this business?
-- What is the key tension or trade-off (e.g. great business but expensive, or cheap but deteriorating)?
-- Would you want to own this at the current price, and why?
-- What would need to change to upgrade or downgrade the verdict?
+Lead with a clear BUY / SELL / HOLD call and a one-line rationale. Then write 3-4 sentences of sharp analyst judgment:
+- What does this data tell you about the QUALITY and DURABILITY of this business?
+- What is the key bull vs. bear tension right now?
+- What is your price conviction — would you be adding, trimming, or watching from the sidelines?
+- What single catalyst would change your rating?
 
-Write like a seasoned analyst presenting to an investment committee. Be direct, opinionated, and specific. No bullet points, no headers, plain prose only."""
+Write exactly like an MD presenting to the investment committee at 7am. Blunt, confident, specific numbers. No hedging, no caveats, no bullet points, no headers. Plain prose only. If the data screams avoid, say so."""
     return _claude_call(prompt, 1000)
 
 
@@ -340,17 +340,17 @@ def get_miss_explanation(ticker, name, metrics):
         f"- {label}: {val} ({'FAILED' if status == 'red' else 'MARGINAL'})"
         for label, val, status in weak
     ])
-    prompt = f"""Stock: {ticker} ({name})
+    prompt = f"""You are a sell-side analyst at Goldman Sachs equity research. You are writing the "risks and concerns" section of your {ticker} ({name}) note for institutional clients.
 
-These metrics failed or were marginal in our 10-point screening:
+These metrics failed or came in marginal on our 10-point screen:
 {lines}
 
-For each metric above, write 2-3 sentences covering:
-1. What is specifically wrong with {ticker}'s number (be quantitative)
-2. Why this matters for long-term investors
-3. What would realistically need to change for it to pass
+For each metric, write 2-3 sentences. Be surgically specific:
+- Quote the actual number and benchmark it against what you'd want to see
+- Tell the PM exactly why this number is a problem — earnings risk, balance sheet fragility, valuation trap, whatever applies
+- What would need to happen in the next 1-2 quarters for this to flip?
 
-Start each metric on a new line with the metric name in bold. Be direct. No preamble."""
+Lead each metric with its name in bold. Write like you're flagging risks in a morning note — crisp, numbered, no fluff. No preamble, no summary, no sign-off."""
     return _claude_call(prompt, 800)
 
 
@@ -603,19 +603,19 @@ def get_fund_verdict(green_count):
 
 def get_fund_summary(ticker, name, verdict, green_count, metrics):
     metric_lines = "\n".join([f"- {label}: {val} ({status})" for label, val, status, _ in metrics])
-    prompt = f"""You are a senior portfolio advisor at a fee-only RIA. You have just evaluated {ticker} ({name}), a Vanguard fund, using a 10-metric framework:
+    prompt = f"""You are a Managing Director on the asset allocation desk at Morgan Stanley Wealth Management. You are presenting {ticker} ({name}), a Vanguard fund, to the investment committee after running it through a 10-metric framework:
 
 {metric_lines}
 
-Overall verdict: {verdict} ({green_count} of 10 green)
+Verdict: {verdict} ({green_count}/10 green)
 
-Write 3-4 sentences of genuine advisor judgment — do NOT restate the metrics:
-- What role does this fund play in a diversified portfolio?
-- Is this a good core holding at its current cost and risk profile?
-- Who is the ideal investor for this fund, and who should avoid it?
-- What would change your view?
+Lead with a clear CORE HOLD / OVERWEIGHT / TRIM / AVOID call and a one-line rationale. Then write 3-4 sentences of sharp, institutional-quality judgment:
+- What does this fund's cost, risk, and return profile say about its role in a diversified allocation?
+- Is the risk-adjusted return worth it versus the benchmark or alternatives?
+- Who should own this — and who should not?
+- What single data point would change your rating?
 
-Write like an advisor presenting to a client. Be direct, plain English, no jargon. No bullet points, no headers."""
+Write exactly like an MD presenting at 7am. Blunt, specific, no hedging. Plain prose, no bullets, no headers. If the data says avoid it, say so directly."""
     return _claude_call(prompt, 900)
 
 
@@ -636,12 +636,17 @@ Fund context (use this — do NOT contradict it):
 - AUM: {fund_meta.get('aum', 'N/A')}
 - Legal type: {fund_meta.get('legal_type', 'N/A')}
 """
-    prompt = f"""Fund: {ticker} ({name}) — Vanguard
+    prompt = f"""You are a senior fund analyst at Vanguard's internal due diligence desk, writing a risk flag memo on {ticker} ({name}).
 {meta_str}
-Weak metrics:
+These metrics came in weak on our 10-point evaluation:
 {lines}
 
-For each metric, write 2 sentences: what's wrong with the number and why it matters. Be specific and accurate — do not make assumptions that contradict the fund context above. Start each with the metric name in bold."""
+For each metric, write 2-3 sentences. Be precise and factual — do NOT contradict any fund context provided above:
+- Quote the specific number and what the threshold is
+- Explain the concrete risk this creates for an investor holding this fund
+- What would need to change for this metric to pass?
+
+Lead each with the metric name in bold. No preamble, no summary. Write like you're flagging risks for a portfolio committee — direct, data-driven, no softening."""
     return _claude_call(prompt, 600)
 
 
