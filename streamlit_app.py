@@ -619,7 +619,7 @@ Write like an advisor presenting to a client. Be direct, plain English, no jargo
     return _claude_call(prompt, 900)
 
 
-def get_fund_miss_explanation(ticker, name, metrics):
+def get_fund_miss_explanation(ticker, name, metrics, fund_meta=None):
     weak = [(label, val, status) for label, val, status, _ in metrics if status in ("red", "yellow")]
     if not weak:
         return "All metrics passed — nothing to explain."
@@ -627,12 +627,21 @@ def get_fund_miss_explanation(ticker, name, metrics):
         f"- {label}: {val} ({'FAILED' if status == 'red' else 'MARGINAL'})"
         for label, val, status in weak
     ])
+    meta_str = ""
+    if fund_meta:
+        meta_str = f"""
+Fund context (use this — do NOT contradict it):
+- Inception: {fund_meta.get('inception', 'N/A')}
+- Category: {fund_meta.get('category', 'N/A')}
+- AUM: {fund_meta.get('aum', 'N/A')}
+- Legal type: {fund_meta.get('legal_type', 'N/A')}
+"""
     prompt = f"""Fund: {ticker} ({name}) — Vanguard
-
+{meta_str}
 Weak metrics:
 {lines}
 
-For each metric, write 2 sentences: what's wrong with the number, and what a better alternative might look like. Be specific and practical. Start with the metric name in bold."""
+For each metric, write 2 sentences: what's wrong with the number and why it matters. Be specific and accurate — do not make assumptions that contradict the fund context above. Start each with the metric name in bold."""
     return _claude_call(prompt, 600)
 
 
@@ -1448,7 +1457,12 @@ with tab3:
                     if fmiss_key not in st.session_state:
                         if st.button("Explain weak metrics →", key=f"fund_miss_btn_{ft}"):
                             with st.spinner("Analyzing..."):
-                                st.session_state[fmiss_key] = get_fund_miss_explanation(ft, fname, fmetrics)
+                                st.session_state[fmiss_key] = get_fund_miss_explanation(ft, fname, fmetrics, fund_meta={
+                                    "inception":  inception_str,
+                                    "category":   category,
+                                    "aum":        aum,
+                                    "legal_type": legal,
+                                })
                     if fmiss_key in st.session_state:
                         st.markdown(st.session_state[fmiss_key])
 
