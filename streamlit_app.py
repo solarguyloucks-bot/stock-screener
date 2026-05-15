@@ -977,7 +977,7 @@ if not check_password():
     st.stop()
 
 # ── Layout ────────────────────────────────────────────────────────────────────
-col1, col2, col3 = st.columns([3, 2, 3])
+col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
     st.image("Stonks.jpg", use_container_width=True)
 
