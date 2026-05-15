@@ -315,10 +315,12 @@ def _claude_call(prompt, max_tokens=1000):
 
 
 @st.cache_data(ttl=86400)
-def get_executive_summary(ticker, name, verdict, green_count, metrics):
+def get_executive_summary(ticker, name, verdict, green_count, metrics, current_price=None):
     metric_lines = "\n".join([f"- {label}: {val} ({status})" for label, val, status, _ in metrics])
+    price_line = f"Current price: ${current_price}" if current_price else ""
     prompt = f"""You are a Managing Director at a top-tier Wall Street equity research desk — think Goldman, Morgan Stanley, or Bernstein. You have just run {ticker} ({name}) through a 10-metric quantitative screen:
 
+{price_line}
 {metric_lines}
 
 Screening verdict: {verdict} ({green_count}/10 green)
@@ -328,6 +330,8 @@ Lead with a clear BUY / SELL / HOLD call and a one-line rationale. Then write 3-
 - What is the key bull vs. bear tension right now?
 - What is your price conviction — would you be adding, trimming, or watching from the sidelines?
 - What single catalyst would change your rating?
+
+IMPORTANT: If you state a price target, it must be ABOVE the current price for a BUY, BELOW for a SELL, and near current for a HOLD. Do not contradict your own rating with the target.
 
 Write exactly like an MD presenting to the investment committee at 7am. Blunt, confident, specific numbers. No hedging, no caveats, no bullet points, no headers. Plain prose only. If the data screams avoid, say so."""
     return _claude_call(prompt, 1000)
@@ -1254,7 +1258,7 @@ with tab1:
 
             # ── Executive Summary ─────────────────────────────────────────────
             with st.spinner("Generating executive summary..."):
-                summary = get_executive_summary(ticker, name, verdict, green_count, metrics)
+                summary = get_executive_summary(ticker, name, verdict, green_count, metrics, current_price=current)
 
             st.markdown(f"""
                 <p class="section-header" style="margin-top:1.5rem;">Executive summary</p>
