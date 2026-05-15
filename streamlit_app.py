@@ -954,14 +954,19 @@ def check_password():
     """, unsafe_allow_html=True)
     col_l, col_m, col_r = st.columns([1, 2, 1])
     with col_m:
-        pwd = st.text_input("Password", type="password", label_visibility="collapsed",
-                            placeholder="Password")
-        if pwd:
-            if pwd == st.secrets["APP_PASSWORD"]:
-                st.session_state["authenticated"] = True
-                st.rerun()
-            else:
-                st.error("Incorrect password")
+        with st.form("login_form"):
+            pcol, bcol = st.columns([3, 1])
+            with pcol:
+                pwd = st.text_input("Password", type="password", label_visibility="collapsed",
+                                    placeholder="Password")
+            with bcol:
+                submitted = st.form_submit_button("Enter →", use_container_width=True)
+            if submitted:
+                if pwd == st.secrets["APP_PASSWORD"]:
+                    st.session_state["authenticated"] = True
+                    st.rerun()
+                else:
+                    st.error("Incorrect password")
     return False
 
 if not check_password():
